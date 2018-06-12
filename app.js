@@ -106,7 +106,9 @@ async function start() {
     }
     registerWalls();
 
-    let path, gridBackup, finder, directions, direction, nextDot;
+    let path, blinkPath, gridBackup, finder, finderBlinky, 
+        directions, direction, directionBlinky, nextDot, directionsBlinky;
+    
     fetchStreaming('http://localhost:8080/current-state', {
         body: JSON.stringify({
             gameId,
@@ -118,7 +120,8 @@ async function start() {
     }, stream => {
         const currentState = JSON.parse(stream);
         console.log(currentState);
-
+        
+        //Path: Pacman
         if (!directions || directions.length === 0) {
             nextDot = getNextDot(currentState);
             gridBackup = grid.clone();
@@ -128,11 +131,25 @@ async function start() {
             directions = directions.reverse();
             directions.pop();
         }
-
+        
+       
         if (directions.length !== 0) {
             direction = directions.pop();
             performMove(gameId, pacman.authId, TYPE_PACMAN, direction);
         }
-
+        
+        //Path: Blinky
+        if (!directionBlinky || directionBlinky.length === 0) {
+            finderBlinky = new PF.DijkstraFinder();
+            blinkPath = finder.findPath(currentState.blinky.x, currentState.blinky.y, currentState.pacman.currentPosition.x, currentState.pacman.currentPosition.y, grid.clone());
+            directionsBlinky = translatePathToDirection(blinkPath);
+            directionsBlinky = directions.reverse();
+            directionsBlinky.pop();
+        }
+        
+        if(directionsBlinky.length !== 0) {
+            directionBlinky = directionsBlinky.pop();
+            performMove(gameId, pacman.authId, 'BLINKY', directionBlinky);
+        }
     });
 }
