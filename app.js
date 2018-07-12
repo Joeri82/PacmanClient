@@ -4,16 +4,19 @@ const DIRECTION_NORTH = 'NORTH';
 const DIRECTION_EAST = 'EAST';
 const DIRECTION_SOUTH = 'SOUTH';
 const DIRECTION_WEST = 'WEST';
+const LOCALSERVER = 'localhost:8080';
 
-const registerGame = () => {
-    const request = new Request('http://localhost:8080/register-game');
+const registerGame = (server) => {
+    const loc = server || LOCALSERVER;
+    const request = new Request(`http://${loc}/register-game`);
     return fetch(request)
         .then(response => response.json())
         .then(json => json.gameId);
 };
 
-const registerPlayer = (gameId, type) => {
-    const request = new Request('http://localhost:8080/register-player', {
+const registerPlayer = (gameId, type, server) => {
+    const loc = server || LOCALSERVER;
+    const request = new Request(`http://${loc}/register-player`, {
         body: JSON.stringify({
             gameId,
             type
@@ -27,8 +30,9 @@ const registerPlayer = (gameId, type) => {
         .then(response => response.json());
 };
 
-const performMove = (gameId, authId, type, direction) => {
-    const request = new Request('http://localhost:8080/perform-move', {
+const performMove = (gameId, authId, type, direction, server) => {
+    const loc = server || LOCALSERVER;
+    const request = new Request(`http://${loc}/perform-move`, {
         body: JSON.stringify({
             gameId,
             authId,
@@ -71,25 +75,44 @@ function translatePathToDirection(coordinates) {
     })
 }
 
-const getNextDot = currentState => {
+const getNextClosestDotPath = (currentState, grid) => {
     const pacmanPosition = currentState.pacman.currentPosition;
     const remainingDots = currentState.remainingDots;
+    const ghosts = ['blinky','pinky','inky','clyde'];
+    let pacmansGrid = grid.clone();
 
-    let closestDot = remainingDots[0];
-    for (const dot of remainingDots) {
-        if (Math.abs(dot.x - pacmanPosition.x) <= Math.abs(closestDot.x - pacmanPosition.x) &&
-            Math.abs(dot.y - pacmanPosition.y) <= Math.abs(closestDot.y - pacmanPosition.y)) {
-            closestDot = dot;
+    //ghost zone, 9 non walkable maze parts
+    for(let ghost of ghosts) {
+        pacmansGrid.setWalkableAt(currentState[ghost].currentPosition.x-1, currentState[ghost].currentPosition.y, false);
+        pacmansGrid.setWalkableAt(currentState[ghost].currentPosition.x-1, currentState[ghost].currentPosition.y-1, false);
+        pacmansGrid.setWalkableAt(currentState[ghost].currentPosition.x-1, currentState[ghost].currentPosition.y+1, false);
+        pacmansGrid.setWalkableAt(currentState[ghost].currentPosition.x+1, currentState[ghost].currentPosition.y, false);
+        pacmansGrid.setWalkableAt(currentState[ghost].currentPosition.x+1, currentState[ghost].currentPosition.y-1, false);
+        pacmansGrid.setWalkableAt(currentState[ghost].currentPosition.x+1, currentState[ghost].currentPosition.y+1, false);
+        pacmansGrid.setWalkableAt(currentState[ghost].currentPosition.x, currentState[ghost].currentPosition.y, false);
+        pacmansGrid.setWalkableAt(currentState[ghost].currentPosition.x, currentState[ghost].currentPosition.y-1, false);
+        pacmansGrid.setWalkableAt(currentState[ghost].currentPosition.x, currentState[ghost].currentPosition.y+1, false);
+        pacmansGrid.setWalkableAt(currentState[ghost].currentPosition.x, currentState[ghost].currentPosition.y, false);
+    }
+
+    let closestPath = new Array(9999);
+
+    for (let dot of remainingDots) {
+        let finder = new PF.BiDijkstraFinder();
+        let otherPath = finder.findPath(pacmanPosition.x, pacmanPosition.y, dot.x, dot.y, pacmansGrid.clone());
+        if (otherPath.length > 0 && otherPath.length < closestPath.length) {
+            closestPath = otherPath;
         }
     }
 
-    return closestDot;
+    return closestPath;
 };
 
-async function start() {
-    const gameId = await registerGame();
-    const pacman = await registerPlayer(gameId, TYPE_PACMAN);
-    const ghosts = await registerPlayer(gameId, TYPE_GHOSTS);
+async function start(server) {
+    const loc = server || LOCALSERVER;
+    const gameId = await registerGame(server);
+    const pacman = await registerPlayer(gameId, TYPE_PACMAN, server);
+    const ghosts = await registerPlayer(gameId, TYPE_GHOSTS, server);
 
     const grid = new PF.Grid(19, 21);
     const registerWalls = () => {
@@ -103,13 +126,13 @@ async function start() {
             });
             x++;
         });
-    }
+    };
     registerWalls();
 
-    let path, blinkPath, gridBackup, finder, finderBlinky, 
-        directions, direction, directionBlinky, nextDot, directionsBlinky;
+    let blinkPath, gridBackup, finder, finderBlinky,
+        directions, direction, directionBlinky, nextDotPath, directionsBlinky;
     
-    fetchStreaming('http://localhost:8080/current-state', {
+    fetchStreaming(`http://${loc}/current-state`, {
         body: JSON.stringify({
             gameId,
         }),
@@ -119,15 +142,10 @@ async function start() {
         method: 'POST'
     }, stream => {
         const currentState = JSON.parse(stream);
-        console.log(currentState);
         
         //Path: Pacman
         if (!directions || directions.length === 0) {
-            nextDot = getNextDot(currentState);
-            gridBackup = grid.clone();
-            finder = new PF.AStarFinder();
-            path = finder.findPath(currentState.pacman.currentPosition.x, currentState.pacman.currentPosition.y, nextDot.x, nextDot.y, gridBackup);
-            directions = translatePathToDirection(path);
+            directions = translatePathToDirection(getNextClosestDotPath(currentState, grid.clone()));
             directions = directions.reverse();
             directions.pop();
         }
@@ -139,9 +157,9 @@ async function start() {
         }
         
         //Path: Blinky
-        if (!directionBlinky || directionBlinky.length === 0) {
+       /* if (!directionBlinky || directionBlinky.length === 0) {
             finderBlinky = new PF.DijkstraFinder();
-            blinkPath = finder.findPath(currentState.blinky.x, currentState.blinky.y, currentState.pacman.currentPosition.x, currentState.pacman.currentPosition.y, grid.clone());
+            blinkPath = finderBlinky.findPath(currentState.blinky.x, currentState.blinky.y, currentState.pacman.currentPosition.x, currentState.pacman.currentPosition.y, grid.clone());
             directionsBlinky = translatePathToDirection(blinkPath);
             directionsBlinky = directions.reverse();
             directionsBlinky.pop();
@@ -150,6 +168,6 @@ async function start() {
         if(directionsBlinky.length !== 0) {
             directionBlinky = directionsBlinky.pop();
             performMove(gameId, pacman.authId, 'BLINKY', directionBlinky);
-        }
+        }*/
     });
 }
